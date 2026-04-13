@@ -1,0 +1,20 @@
+{
+  "name": "opencmux",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "opencmux": "tsx ./bin/opencmux.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@opencode-ai/plugin": "1.4.3",
+    "oh-my-opencode": "latest",
+    "react-grab": "^0.1.32",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.4",
+    "tsx": "^4.20.3",
+    "typescript": "^5.9.2"
+  }
+}

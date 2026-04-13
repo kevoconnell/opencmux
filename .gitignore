@@ -1,0 +1,33 @@
+.DS_Store
+
+# dependencies
+node_modules/
+
+# local environment
+.env
+.env.*
+!.env.example
+
+# logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# build output
+dist/
+build/
+coverage/
+*.tsbuildinfo
+
+# generated JS twins; TypeScript entrypoints are the source of truth
+bin/*.js
+src/*.js
+
+# local tool/runtime state
+.openreview/
+runtime/bin/
+runtime/config/
+runtime/state/
+runtime/viewer/

@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+script_path="${BASH_SOURCE[0]}"
+while [ -L "$script_path" ]; do
+  script_dir="$(cd "$(dirname "$script_path")" && pwd)"
+  script_path="$(readlink "$script_path")"
+  if [[ "$script_path" != /* ]]; then
+    script_path="$script_dir/$script_path"
+  fi
+done
+
+cmux_omo_root="$(cd "$(dirname "$script_path")/.." && pwd -P)"
+openreview_root="$(cd "$cmux_omo_root/../openreview" && pwd -P 2>/dev/null || true)"
+
+if ! command -v brew >/dev/null 2>&1; then
+  echo "Homebrew is required to install cmux automatically." >&2
+  exit 1
+fi
+
+if ! command -v cmux >/dev/null 2>&1; then
+  brew install cmux
+fi
+
+if [ ! -x "$cmux_omo_root/node_modules/.bin/tsx" ]; then
+  pnpm install --dir "$cmux_omo_root"
+fi
+
+if [ -z "$openreview_root" ] || [ ! -f "$openreview_root/package.json" ]; then
+  echo "openreview repo not found at $cmux_omo_root/../openreview" >&2
+  exit 1
+fi
+
+if [ ! -x "$openreview_root/node_modules/.bin/tsx" ]; then
+  pnpm install --dir "$openreview_root"
+fi
+
+mkdir -p "$HOME/.local/bin"
+ln -sf "$cmux_omo_root/bin/opencmux" "$HOME/.local/bin/opencmux"
+ln -sf "$openreview_root/bin/openreview" "$HOME/.local/bin/openreview"
