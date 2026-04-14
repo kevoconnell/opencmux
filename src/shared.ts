@@ -1,5 +1,6 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -82,6 +83,12 @@ export type TWorkspaceBinding = {
   worktreePath: string;
   workspaceRef: string;
   statePath: string | null;
+};
+
+export type TWorkspaceLaunchPayload = {
+  version: 1;
+  forwardedArgs: string[];
+  worktreePath: string | null;
 };
 
 type TWorkspaceBindingLookup = {
@@ -1179,27 +1186,102 @@ export function buildWorkspaceLaunchCommand({
 }: {
   forwardedArgs: string[];
   worktreePath?: string;
-}): string {
+}): Promise<string> {
+  return buildWorkspaceLaunchCommandFromPayload({
+    forwardedArgs,
+    worktreePath,
+  });
+}
+
+async function buildWorkspaceLaunchCommandFromPayload({
+  forwardedArgs,
+  worktreePath,
+}: {
+  forwardedArgs: string[];
+  worktreePath?: string;
+}): Promise<string> {
   const projectRoot = getProjectRoot();
   const tsxPath = path.join(projectRoot, "node_modules", ".bin", "tsx");
   const launcherPath = path.join(projectRoot, "src", "commands", "opencmux.ts");
-  const resolvedForwardedArgs = applyPromptAgentDefaults({
-    args: forwardedArgs,
+  const launchPayloadPath = await writeWorkspaceLaunchPayload({
+    forwardedArgs,
+    worktreePath: worktreePath ?? null,
   });
   const commandParts = ["env"];
 
   commandParts.push(tsxPath, launcherPath);
-
-  if (worktreePath) {
-    commandParts.push(
-      "--opencmux-worktree-path-b64",
-      Buffer.from(worktreePath, "utf8").toString("base64"),
-    );
-  }
-
-  commandParts.push(...resolvedForwardedArgs);
+  commandParts.push("--opencmux-launch-payload-path", launchPayloadPath);
 
   return commandParts.map(shellQuote).join(" ");
+}
+
+export async function writeWorkspaceLaunchPayload({
+  forwardedArgs,
+  worktreePath,
+}: {
+  forwardedArgs: string[];
+  worktreePath: string | null;
+}): Promise<string> {
+  await ensureRuntimeArtifacts();
+
+  const payloadPath = path.join(
+    getRuntimePaths().runtimeStateDir,
+    `workspace-launch-${randomUUID()}.json`,
+  );
+  const payload: TWorkspaceLaunchPayload = {
+    version: 1,
+    forwardedArgs,
+    worktreePath,
+  };
+
+  await fs.writeFile(payloadPath, `${JSON.stringify(payload)}\n`, "utf8");
+
+  return payloadPath;
+}
+
+async function createCmuxWorkspaceWithRetry({
+  cmuxPath,
+  workspaceName,
+  cwd,
+  buildCommandString,
+}: {
+  cmuxPath: string;
+  workspaceName: string;
+  cwd: string;
+  buildCommandString: () => Promise<string>;
+}): Promise<string> {
+  const maxAttempts = 3;
+
+  for (
+    let attemptNumber = 1;
+    attemptNumber <= maxAttempts;
+    attemptNumber += 1
+  ) {
+    try {
+      const commandString = await buildCommandString();
+
+      return runCommand({
+        command: cmuxPath,
+        args: [
+          "new-workspace",
+          "--name",
+          workspaceName,
+          "--cwd",
+          cwd,
+          "--command",
+          commandString,
+        ],
+      });
+    } catch (error) {
+      if (!isCmuxTransportError(error) || attemptNumber === maxAttempts) {
+        throw error;
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, attemptNumber * 250));
+    }
+  }
+
+  throw new Error("Failed to create cmux workspace");
 }
 
 export async function openWorkspaceForCwd({
@@ -1224,21 +1306,15 @@ export async function openWorkspaceForCwd({
     return `OK ${existingWorkspaceRef} (existing)`;
   }
 
-  const commandString = buildWorkspaceLaunchCommand({
-    forwardedArgs,
-    worktreePath: cwd,
-  });
-  const createOutput = runCommand({
-    command: cmuxPath,
-    args: [
-      "new-workspace",
-      "--name",
-      workspaceName,
-      "--cwd",
-      cwd,
-      "--command",
-      commandString,
-    ],
+  const createOutput = await createCmuxWorkspaceWithRetry({
+    cmuxPath,
+    workspaceName,
+    cwd,
+    buildCommandString: () =>
+      buildWorkspaceLaunchCommand({
+        forwardedArgs,
+        worktreePath: cwd,
+      }),
   });
 
   const workspaceRef = parseRefFromOutput({

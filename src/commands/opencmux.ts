@@ -2,6 +2,7 @@
 
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { forwardChildExit, runCli } from "../cli.js";
 import {
@@ -74,7 +75,11 @@ function normalizeSkillArgs(skillNames: string[]): string[] {
   return [...new Set(skillNames.map((value) => value.trim()).filter(Boolean))];
 }
 
-async function handleSkillsCommand({ argv }: { argv: string[] }): Promise<void> {
+async function handleSkillsCommand({
+  argv,
+}: {
+  argv: string[];
+}): Promise<void> {
   const subcommand = argv[1] ?? "list";
   const configuredSkillNames =
     getConfiguredOpencmuxConfig().defaultPromptSkills ?? [];
@@ -100,7 +105,9 @@ async function handleSkillsCommand({ argv }: { argv: string[] }): Promise<void> 
 
   if (subcommand === "clear") {
     if (argv.length > 2) {
-      throw new Error("`opencmux skills clear` does not accept extra arguments");
+      throw new Error(
+        "`opencmux skills clear` does not accept extra arguments",
+      );
     }
 
     await setConfiguredDefaultPromptSkills({ skillNames: [] });
@@ -240,15 +247,71 @@ function getSimplifiedWorktreeArgs({
   return null;
 }
 
-function parseLauncherArgs(argv: string[]): {
+async function readLaunchPayload({
+  payloadPath,
+}: {
+  payloadPath: string;
+}): Promise<{
   forwardedArgs: string[];
   worktreePath: string | null;
-} {
+}> {
+  const payloadContent = await fs.readFile(payloadPath, "utf8");
+
+  try {
+    const payload = JSON.parse(payloadContent) as unknown;
+
+    if (!payload || typeof payload !== "object") {
+      throw new Error("Invalid workspace launch payload");
+    }
+
+    const version = Reflect.get(payload, "version");
+    const forwardedArgs = Reflect.get(payload, "forwardedArgs");
+    const worktreePath = Reflect.get(payload, "worktreePath");
+
+    if (version !== 1) {
+      throw new Error("Unsupported workspace launch payload version");
+    }
+
+    if (
+      !Array.isArray(forwardedArgs) ||
+      forwardedArgs.some((arg) => typeof arg !== "string")
+    ) {
+      throw new Error("Invalid forwarded args in workspace launch payload");
+    }
+
+    if (!(typeof worktreePath === "string" || worktreePath === null)) {
+      throw new Error("Invalid worktree path in workspace launch payload");
+    }
+
+    return {
+      forwardedArgs,
+      worktreePath,
+    };
+  } finally {
+    await fs.unlink(payloadPath).catch(() => undefined);
+  }
+}
+
+async function parseLauncherArgs(argv: string[]): Promise<{
+  forwardedArgs: string[];
+  worktreePath: string | null;
+}> {
   const forwardedArgs: string[] = [];
   let worktreePath: string | null = null;
+  let launchPayloadPath: string | null = null;
 
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
+
+    if (argument === "--opencmux-launch-payload-path") {
+      const payloadPath = argv[index + 1] ?? "";
+      if (!payloadPath) {
+        throw new Error("Missing value for --opencmux-launch-payload-path");
+      }
+      launchPayloadPath = payloadPath;
+      index += 1;
+      continue;
+    }
 
     if (argument === "--opencmux-worktree-path-b64") {
       const encodedValue = argv[index + 1] ?? "";
@@ -261,6 +324,10 @@ function parseLauncherArgs(argv: string[]): {
     }
 
     forwardedArgs.push(argument);
+  }
+
+  if (launchPayloadPath) {
+    return readLaunchPayload({ payloadPath: launchPayloadPath });
   }
 
   return {
@@ -289,10 +356,8 @@ async function main(): Promise<void> {
     return;
   }
 
-  const {
-    forwardedArgs,
-    worktreePath: launcherWorktreePath,
-  } = parseLauncherArgs(rawArgs);
+  const { forwardedArgs, worktreePath: launcherWorktreePath } =
+    await parseLauncherArgs(rawArgs);
   const resolvedForwardedArgs = applyPromptAgentDefaults({
     args: forwardedArgs,
   });

@@ -445,12 +445,6 @@ export async function runWorktreeCommand({
     shouldInstall,
     shouldConfigureDoppler,
   });
-  if (createBranchName) {
-    maybeInstallWorkspaceDependencies({
-      cwd: worktreeCwd,
-      shouldInstall,
-    });
-  }
   const resolvedWorkspaceName =
     workspaceName ?? getDefaultWorkspaceName({ cwd: worktreeCwd });
   const createOutput = await openWorkspaceForCwd({
@@ -458,6 +452,13 @@ export async function runWorktreeCommand({
     workspaceName: resolvedWorkspaceName,
     forwardedArgs,
   });
+
+  if (createBranchName) {
+    maybeInstallWorkspaceDependencies({
+      cwd: worktreeCwd,
+      shouldInstall,
+    });
+  }
 
   if (createBranchName) {
     console.log(`branch: ${createBranchName}`);
