@@ -8,6 +8,7 @@
 - opens a specific worktree in its own workspace
 - creates a new git worktree and launches into it
 - defaults `--prompt` sessions to `--agent orchestrator` unless you pass `--agent` yourself
+- lets you manage default prompt skills with `opencmux skills ...`
 
 ## Requirements
 
@@ -28,6 +29,11 @@ Make sure the `opencmux` shell wrapper is on your `PATH` if you want to run it g
 
 ```bash
 opencmux [opencode args]
+opencmux skills [list]
+opencmux skills set <skill...>
+opencmux skills add <skill...>
+opencmux skills remove <skill...>
+opencmux skills clear
 opencmux open <path> [opencode args]
 opencmux open --cwd <path> [opencode args]
 opencmux new <branch> [--cwd <repo>] [opencode args]
@@ -39,6 +45,14 @@ Run inside the current cmux workspace:
 
 ```bash
 opencmux --prompt "Review the latest changes"
+```
+
+Manage the default skills appended to prompted sessions:
+
+```bash
+opencmux skills set planner cloudflare
+opencmux skills add wrangler
+opencmux skills list
 ```
 
 Open an existing worktree path:
@@ -68,6 +82,34 @@ Useful flags for `open` and `new`:
 - `open` treats the target path as the worktree to launch.
 - `new` creates a worktree, then opens it in cmux.
 - If you pass `--prompt` without `--agent`, `opencmux` adds `--agent orchestrator`.
+- If `opencmux.defaultPromptSkills` is configured, `opencmux` appends those skills to the prompt.
+
+## Default prompt skills
+
+`opencmux` stores default prompt skills in:
+
+```json
+~/.config/opencode/oh-my-opencode-slim.json
+```
+
+The relevant shape is:
+
+```json
+{
+  "opencmux": {
+    "defaultPromptSkills": ["planner", "cloudflare"]
+  }
+}
+```
+
+You can edit that file directly, or use the built-in command surface:
+
+```bash
+opencmux skills set planner cloudflare
+opencmux skills add wrangler
+opencmux skills remove planner
+opencmux skills clear
+```
 
 ## Runtime files
 

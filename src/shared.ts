@@ -56,7 +56,7 @@ export type TCmuxHookConfig = {
   hooks?: Partial<Record<TCmuxHookName, string[]>>;
 };
 
-type TOpencmuxConfig = {
+export type TOpencmuxConfig = {
   defaultPromptSkills?: string[];
 };
 
@@ -309,7 +309,7 @@ function normalizeStringArray(value: unknown): string[] {
     .filter(Boolean);
 }
 
-function getConfiguredOpencmuxConfig(): TOpencmuxConfig {
+export function getConfiguredOpencmuxConfig(): TOpencmuxConfig {
   const slimConfigPath = path.join(
     getBaseOpencodeDir(),
     "oh-my-opencode-slim.json",
@@ -339,6 +339,42 @@ function getConfiguredOpencmuxConfig(): TOpencmuxConfig {
   } catch {
     return {};
   }
+}
+
+export async function setConfiguredDefaultPromptSkills({
+  skillNames,
+}: {
+  skillNames: string[];
+}): Promise<string[]> {
+  const slimConfigPath = path.join(
+    getBaseOpencodeDir(),
+    "oh-my-opencode-slim.json",
+  );
+  const normalizedSkillNames = [...new Set(normalizeStringArray(skillNames))];
+  const currentConfig = (await readJsonOrNull(slimConfigPath)) ?? {};
+  const nextConfig: TJsonRecord = {
+    ...(isJsonRecord(currentConfig) ? currentConfig : {}),
+  };
+  const nextOpencmuxConfig: TJsonRecord = isJsonRecord(nextConfig.opencmux)
+    ? { ...nextConfig.opencmux }
+    : {};
+
+  if (normalizedSkillNames.length > 0) {
+    nextOpencmuxConfig.defaultPromptSkills = normalizedSkillNames;
+  } else {
+    delete nextOpencmuxConfig.defaultPromptSkills;
+  }
+
+  if (Object.keys(nextOpencmuxConfig).length > 0) {
+    nextConfig.opencmux = nextOpencmuxConfig;
+  } else {
+    delete nextConfig.opencmux;
+  }
+
+  await fs.mkdir(getBaseOpencodeDir(), { recursive: true });
+  await writeJson(slimConfigPath, nextConfig);
+
+  return normalizedSkillNames;
 }
 
 function buildPromptSkillInstruction({

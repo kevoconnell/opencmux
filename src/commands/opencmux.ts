@@ -8,12 +8,14 @@ import {
   applyPromptAgentDefaults,
   ensureRuntimeArtifacts,
   getCmuxCallerContext,
+  getConfiguredOpencmuxConfig,
   getWorkspaceStatePath,
   installCmuxRenderRefreshHooksBestEffort,
   pathExists,
   readSurfaceShimState,
   refreshCmuxSurfacesBestEffort,
   requireCommand,
+  setConfiguredDefaultPromptSkills,
   writeSurfaceShimState,
 } from "../shared.js";
 import { runWorktreeCommand } from "../worktree.js";
@@ -24,12 +26,19 @@ function getHelpText(): string {
     "",
     "Usage:",
     "  opencmux [opencode args]",
+    "  opencmux skills [list]",
+    "  opencmux skills set <skill...>",
+    "  opencmux skills add <skill...>",
+    "  opencmux skills remove <skill...>",
+    "  opencmux skills clear",
     "  opencmux open <path> [opencode args]",
     "  opencmux open --cwd <path> [opencode args]",
     "  opencmux new <branch> [--cwd <repo>] [opencode args]",
     "",
     "Examples:",
     '  opencmux --prompt "Continue here"',
+    "  opencmux skills list",
+    "  opencmux skills set planner cloudflare",
     '  opencmux open ~/Desktop/some-worktree --prompt "Continue the work"',
     '  opencmux new my-branch --cwd ~/Desktop/opencmux --prompt "Plan the work"',
     "",
@@ -37,7 +46,107 @@ function getHelpText(): string {
     "  - Bare `opencmux` assumes you are already inside cmux.",
     "  - `open` and `new` create or select cmux workspaces for worktrees.",
     "  - When `--prompt` is provided and `--agent` is not, opencmux defaults to `--agent orchestrator`.",
+    "  - `opencmux skills ...` manages the default skills appended to `--prompt`.",
   ].join("\n");
+}
+
+function getSkillsHelpText(): string {
+  return [
+    "opencmux skills",
+    "",
+    "Usage:",
+    "  opencmux skills [list]",
+    "  opencmux skills set <skill...>",
+    "  opencmux skills add <skill...>",
+    "  opencmux skills remove <skill...>",
+    "  opencmux skills clear",
+    "",
+    "Examples:",
+    "  opencmux skills list",
+    "  opencmux skills set planner cloudflare",
+    "  opencmux skills add web-perf wrangler",
+    "  opencmux skills remove planner",
+    "  opencmux skills clear",
+  ].join("\n");
+}
+
+function normalizeSkillArgs(skillNames: string[]): string[] {
+  return [...new Set(skillNames.map((value) => value.trim()).filter(Boolean))];
+}
+
+async function handleSkillsCommand({ argv }: { argv: string[] }): Promise<void> {
+  const subcommand = argv[1] ?? "list";
+  const configuredSkillNames =
+    getConfiguredOpencmuxConfig().defaultPromptSkills ?? [];
+
+  if (subcommand === "--help" || subcommand === "-h") {
+    console.log(getSkillsHelpText());
+    return;
+  }
+
+  if (subcommand === "list") {
+    if (argv.length > 2) {
+      throw new Error("`opencmux skills list` does not accept extra arguments");
+    }
+
+    if (configuredSkillNames.length === 0) {
+      console.log("No default prompt skills configured.");
+      return;
+    }
+
+    console.log(configuredSkillNames.join("\n"));
+    return;
+  }
+
+  if (subcommand === "clear") {
+    if (argv.length > 2) {
+      throw new Error("`opencmux skills clear` does not accept extra arguments");
+    }
+
+    await setConfiguredDefaultPromptSkills({ skillNames: [] });
+    console.log("Cleared default prompt skills.");
+    return;
+  }
+
+  const requestedSkillNames = normalizeSkillArgs(argv.slice(2));
+  if (requestedSkillNames.length === 0) {
+    throw new Error(`Missing skills for \`opencmux skills ${subcommand}\``);
+  }
+
+  if (subcommand === "set") {
+    const savedSkillNames = await setConfiguredDefaultPromptSkills({
+      skillNames: requestedSkillNames,
+    });
+    console.log(savedSkillNames.join("\n"));
+    return;
+  }
+
+  if (subcommand === "add") {
+    const savedSkillNames = await setConfiguredDefaultPromptSkills({
+      skillNames: [...configuredSkillNames, ...requestedSkillNames],
+    });
+    console.log(savedSkillNames.join("\n"));
+    return;
+  }
+
+  if (subcommand === "remove") {
+    const requestedSkillSet = new Set(requestedSkillNames);
+    const savedSkillNames = await setConfiguredDefaultPromptSkills({
+      skillNames: configuredSkillNames.filter(
+        (skillName) => !requestedSkillSet.has(skillName),
+      ),
+    });
+
+    if (savedSkillNames.length === 0) {
+      console.log("No default prompt skills configured.");
+      return;
+    }
+
+    console.log(savedSkillNames.join("\n"));
+    return;
+  }
+
+  throw new Error(`Unsupported skills subcommand: ${subcommand}`);
 }
 
 function isHelpCommand({ argv }: { argv: string[] }): boolean {
@@ -165,6 +274,11 @@ async function main(): Promise<void> {
 
   if (isHelpCommand({ argv: rawArgs })) {
     console.log(getHelpText());
+    return;
+  }
+
+  if (rawArgs[0] === "skills") {
+    await handleSkillsCommand({ argv: rawArgs });
     return;
   }
 
