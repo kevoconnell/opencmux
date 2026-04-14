@@ -358,7 +358,8 @@ async function main(): Promise<void> {
 
   const { forwardedArgs, worktreePath: launcherWorktreePath } =
     await parseLauncherArgs(rawArgs);
-  const resolvedForwardedArgs = applyPromptAgentDefaults({
+  const worktreePath = launcherWorktreePath ?? process.cwd();
+  const resolvedForwardedArgs = await applyPromptAgentDefaults({
     args: forwardedArgs,
   });
 
@@ -380,8 +381,6 @@ async function main(): Promise<void> {
     workspaceRef: callerContext.workspaceRef,
   });
   const mainPaneId = `%opencmux-main-${sessionKey}`;
-  const worktreePath = launcherWorktreePath ?? process.cwd();
-
   if (await pathExists(statePath)) {
     try {
       const existingState = await readSurfaceShimState({ statePath });
