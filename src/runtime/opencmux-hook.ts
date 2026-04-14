@@ -1,16 +1,16 @@
 #!/usr/bin/env node
 
 import fs from "node:fs/promises";
-import path from "node:path";
 import { spawnSync } from "node:child_process";
 import process from "node:process";
+import { runCli } from "../cli.js";
 import {
   getOpencmuxHookConfigPath,
   type TCmuxHookConfig,
   type TCmuxHookName,
   requireCommand,
   runCommand,
-} from "../src/shared.js";
+} from "../shared.js";
 
 const BUILTIN_REFRESH_HOOKS = new Set<TCmuxHookName>([
   "after-new-workspace",
@@ -75,10 +75,22 @@ async function getHookCommands(hookName: TCmuxHookName): Promise<string[]> {
 }
 
 function refreshSurfacesBestEffort(): void {
+  const workspaceRef =
+    process.env.CMUX_WORKSPACE_ID?.trim() ||
+    process.env.OPENCMUX_WORKSPACE_ID?.trim() ||
+    process.env.OPENCMUX_WORKSPACE_REF?.trim() ||
+    null;
+
   try {
     runCommand({
       command: requireCommand("cmux"),
       args: ["refresh-surfaces"],
+      env: workspaceRef
+        ? {
+            ...process.env,
+            CMUX_WORKSPACE_ID: workspaceRef,
+          }
+        : process.env,
     });
   } catch {
     // Ignore refresh failures; custom hooks should still run.
@@ -143,7 +155,4 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((error) => {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exit(1);
-});
+runCli(main);

@@ -13,6 +13,15 @@ done
 
 project_root="$(cd "$(dirname "$script_path")/.." && pwd -P)"
 
-"$project_root/bin/ensure-opencmux"
+if ! command -v cmux >/dev/null 2>&1; then
+  if ! command -v brew >/dev/null 2>&1; then
+    echo "cmux is not installed and Homebrew is unavailable for automatic install." >&2
+    exit 1
+  fi
 
-exec cmux "$@"
+  brew install cmux
+fi
+
+if [ ! -x "$project_root/node_modules/.bin/tsx" ]; then
+  pnpm install --dir "$project_root"
+fi

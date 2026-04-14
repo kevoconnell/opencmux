@@ -398,7 +398,7 @@ if [ -n "\${OPENCMUX_TAB_ID:-}" ]; then
   export CMUX_TAB_ID="\${OPENCMUX_TAB_ID}"
 fi
 
-exec ${shellQuote(path.join(projectRoot, "node_modules", ".bin", "tsx"))} ${shellQuote(path.join(projectRoot, "bin", "opencmux-tmux-shim.ts"))} "$@"
+exec ${shellQuote(path.join(projectRoot, "node_modules", ".bin", "tsx"))} ${shellQuote(path.join(projectRoot, "src", "runtime", "opencmux-tmux-shim.ts"))} "$@"
 `;
 }
 
@@ -408,7 +408,7 @@ function getCmuxHookShimContent(): string {
   return `#!/usr/bin/env bash
 set -euo pipefail
 
-exec ${shellQuote(path.join(projectRoot, "node_modules", ".bin", "tsx"))} ${shellQuote(path.join(projectRoot, "bin", "opencmux-hook.ts"))} "$@"
+exec ${shellQuote(path.join(projectRoot, "node_modules", ".bin", "tsx"))} ${shellQuote(path.join(projectRoot, "src", "runtime", "opencmux-hook.ts"))} "$@"
 `;
 }
 
@@ -417,16 +417,6 @@ export function getOpencmuxHookConfigPath(): string {
     process.env.OPENCMUX_HOOKS_CONFIG?.trim() ||
     path.join(os.homedir(), ".config", "opencmux", "hooks.json")
   );
-}
-
-function getSlackMediaMcpShimContent(): string {
-  const projectRoot = getProjectRoot();
-
-  return `#!/usr/bin/env bash
-set -euo pipefail
-
-exec ${shellQuote(path.join(projectRoot, "node_modules", ".bin", "tsx"))} ${shellQuote(path.join(projectRoot, "bin", "omo-slack-media-mcp.ts"))} "$@"
-`;
 }
 
 function getWorktreeRegistryPath(): string {
@@ -976,6 +966,12 @@ export async function ensureRuntimeArtifacts(): Promise<TRuntimePaths> {
   await fs.mkdir(runtimePaths.runtimeStateDir, { recursive: true });
   await fs.mkdir(runtimePaths.runtimeViewerDir, { recursive: true });
 
+  for (const obsoleteRuntimeBinName of ["omo-slack-media-mcp"]) {
+    await fs.rm(path.join(runtimePaths.runtimeBinDir, obsoleteRuntimeBinName), {
+      force: true,
+    });
+  }
+
   const dependencySourceDir = (await pathExists(
     path.join(baseShadowSourceDir, "node_modules"),
   ))
@@ -1070,13 +1066,6 @@ export async function ensureRuntimeArtifacts(): Promise<TRuntimePaths> {
   await fs.writeFile(cmuxHookShimPath, getCmuxHookShimContent(), "utf8");
   await fs.chmod(cmuxHookShimPath, 0o755);
 
-  const slackMediaShimPath = path.join(
-    runtimePaths.runtimeBinDir,
-    "omo-slack-media-mcp",
-  );
-  await fs.writeFile(slackMediaShimPath, getSlackMediaMcpShimContent(), "utf8");
-  await fs.chmod(slackMediaShimPath, 0o755);
-
   return runtimePaths;
 }
 
@@ -1157,7 +1146,7 @@ export function buildWorkspaceLaunchCommand({
 }): string {
   const projectRoot = getProjectRoot();
   const tsxPath = path.join(projectRoot, "node_modules", ".bin", "tsx");
-  const launcherPath = path.join(projectRoot, "bin", "opencmux.ts");
+  const launcherPath = path.join(projectRoot, "src", "commands", "opencmux.ts");
   const resolvedForwardedArgs = applyPromptAgentDefaults({
     args: forwardedArgs,
   });

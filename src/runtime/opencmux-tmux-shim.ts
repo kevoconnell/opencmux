@@ -1,13 +1,14 @@
 #!/usr/bin/env node
 
 import { randomUUID } from "node:crypto";
+import { runCli } from "../cli.js";
 import {
   refreshCmuxSurfacesBestEffort,
   readSurfaceShimState,
   requireCommand,
   runCommand,
   writeSurfaceShimState,
-} from "../src/shared.js";
+} from "../shared.js";
 
 type TSplitCommand = {
   printPaneId: boolean;
@@ -496,7 +497,4 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((error) => {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exit(1);
-});
+runCli(main);

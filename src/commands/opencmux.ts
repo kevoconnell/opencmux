@@ -3,6 +3,7 @@
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import path from "node:path";
+import { forwardChildExit, runCli } from "../cli.js";
 import {
   applyPromptAgentDefaults,
   ensureRuntimeArtifacts,
@@ -14,8 +15,8 @@ import {
   refreshCmuxSurfacesBestEffort,
   requireCommand,
   writeSurfaceShimState,
-} from "../src/shared.js";
-import { runWorktreeCommand } from "../src/worktree.js";
+} from "../shared.js";
+import { runWorktreeCommand } from "../worktree.js";
 
 function getHelpText(): string {
   return [
@@ -40,9 +41,8 @@ function getHelpText(): string {
 }
 
 function isHelpCommand({ argv }: { argv: string[] }): boolean {
-  return (
-    argv.length > 0 && argv.some((arg) => arg === "--help" || arg === "-h")
-  );
+  const firstArg = argv[0] ?? "";
+  return firstArg === "--help" || firstArg === "-h";
 }
 
 function getSimplifiedWorktreeArgs({
@@ -54,37 +54,68 @@ function getSimplifiedWorktreeArgs({
 
   if (command === "open") {
     const args = argv.slice(1);
-    const firstArg = args[0] ?? "";
 
-    if (!firstArg) {
+    if (args.length === 0) {
       throw new Error("Missing worktree path for `opencmux open <path>`");
     }
 
-    if (firstArg === "--cwd") {
-      const targetPath = args[1] ?? "";
+    for (let index = 0; index < args.length; index += 1) {
+      const argument = args[index] ?? "";
 
-      if (!targetPath) {
-        throw new Error("Missing value for `opencmux open --cwd <path>`");
+      if (argument === "--cwd") {
+        const targetPath = args[index + 1] ?? "";
+
+        if (!targetPath) {
+          throw new Error("Missing value for `opencmux open --cwd <path>`");
+        }
+
+        return [
+          ...args.slice(0, index),
+          "--cwd",
+          path.resolve(targetPath),
+          ...args.slice(index + 2),
+        ];
       }
 
-      return ["--cwd", path.resolve(targetPath), ...args.slice(2)];
-    }
+      if (argument.startsWith("--cwd=")) {
+        const targetPath = argument.slice("--cwd=".length);
 
-    if (firstArg.startsWith("--cwd=")) {
-      const targetPath = firstArg.slice("--cwd=".length);
+        if (!targetPath) {
+          throw new Error("Missing value for `opencmux open --cwd <path>`");
+        }
 
-      if (!targetPath) {
-        throw new Error("Missing value for `opencmux open --cwd <path>`");
+        return [
+          ...args.slice(0, index),
+          "--cwd",
+          path.resolve(targetPath),
+          ...args.slice(index + 1),
+        ];
       }
 
-      return ["--cwd", path.resolve(targetPath), ...args.slice(1)];
+      if (argument === "--name") {
+        if (!args[index + 1]) {
+          throw new Error("Missing value for --name");
+        }
+
+        index += 1;
+        continue;
+      }
+
+      if (argument === "--no-install" || argument === "--no-doppler") {
+        continue;
+      }
+
+      if (!argument.startsWith("-")) {
+        return [
+          ...args.slice(0, index),
+          "--cwd",
+          path.resolve(argument),
+          ...args.slice(index + 1),
+        ];
+      }
     }
 
-    if (firstArg.startsWith("-")) {
-      throw new Error("Missing worktree path for `opencmux open <path>`");
-    }
-
-    return ["--cwd", path.resolve(firstArg), ...args.slice(1)];
+    throw new Error("Missing worktree path for `opencmux open <path>`");
   }
 
   if (command === "new") {
@@ -229,20 +260,17 @@ async function main(): Promise<void> {
       OPENCMUX_WORKSPACE_ID: workspaceId,
       OPENCMUX_WORKSPACE_REF: callerContext.workspaceRef,
       OPENCMUX_PANE_REF: callerContext.paneRef,
+      OPENCMUX_SURFACE_ID: callerContext.surfaceRef,
       OPENCMUX_SURFACE_REF: callerContext.surfaceRef,
       OPENCMUX_TAB_ID: callerContext.tabRef,
       OPENCMUX_STATE_PATH: statePath,
+      OPENCMUX_WORKTREE_PATH: worktreePath,
     },
   });
 
   refreshCmuxSurfacesBestEffort({ workspaceRef: callerContext.workspaceRef });
 
-  child.on("exit", (exitCode) => {
-    process.exit(exitCode ?? 0);
-  });
+  forwardChildExit(child);
 }
 
-main().catch((error) => {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exit(1);
-});
+runCli(main);

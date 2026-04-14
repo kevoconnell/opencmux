@@ -12,7 +12,40 @@ while [ -L "$script_path" ]; do
 done
 
 project_root="$(cd "$(dirname "$script_path")/.." && pwd -P)"
+tsx_path="$project_root/node_modules/.bin/tsx"
+entrypoint_path="$project_root/src/commands/opencmux.ts"
 
-"$project_root/bin/ensure-opencmux"
+function print_help() {
+  cat <<'EOF'
+opencmux
 
-exec "$project_root/node_modules/.bin/tsx" "$project_root/bin/opencmux.ts" "$@"
+Usage:
+  opencmux [opencode args]
+  opencmux open <path> [opencode args]
+  opencmux open --cwd <path> [opencode args]
+  opencmux new <branch> [--cwd <repo>] [opencode args]
+
+Examples:
+  opencmux --prompt "Continue here"
+  opencmux open ~/Desktop/some-worktree --prompt "Continue the work"
+  opencmux new my-branch --cwd ~/Desktop/opencmux --prompt "Plan the work"
+
+Notes:
+  - Bare `opencmux` assumes you are already inside cmux.
+  - `open` and `new` create or select cmux workspaces for worktrees.
+  - When `--prompt` is provided and `--agent` is not, opencmux defaults to `--agent orchestrator`.
+EOF
+}
+
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+  if [ -x "$tsx_path" ] && command -v node >/dev/null 2>&1; then
+    exec "$tsx_path" "$entrypoint_path" "$@"
+  fi
+
+  print_help
+  exit 0
+fi
+
+"$project_root/scripts/ensure-opencmux.sh"
+
+exec "$tsx_path" "$entrypoint_path" "$@"

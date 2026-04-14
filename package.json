@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "opencmux": "tsx ./bin/opencmux.ts"
+    "opencmux": "./bin/opencmux"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",

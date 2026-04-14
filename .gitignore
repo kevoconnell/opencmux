@@ -21,9 +21,8 @@ build/
 coverage/
 *.tsbuildinfo
 
-# generated JS twins; TypeScript entrypoints are the source of truth
-bin/*.js
-src/*.js
+# generated JS twins; TypeScript sources are the source of truth
+src/**/*.js
 
 # local tool/runtime state
 .openreview/

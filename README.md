@@ -81,5 +81,6 @@ Those files are generated locally and are not the source of truth.
 
 ## Source of truth
 
-- `bin/*.ts` and `src/*.ts` are the executable source of truth
-- shell wrappers in `bin/` invoke those TypeScript entrypoints through `tsx`
+- `bin/opencmux` is the only public wrapper
+- `src/**/*.ts` contains the executable source of truth
+- `bin/opencmux` invokes the internal TypeScript entrypoint through `tsx`
