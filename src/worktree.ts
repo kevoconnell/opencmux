@@ -27,11 +27,24 @@ type TWorktreeArgs = {
   forwardedArgs: string[];
 };
 
+function getDefaultBaseRef({ repoCwd }: { repoCwd: string }): string {
+  try {
+    const currentBranch = runCommand({
+      command: "git",
+      args: ["-C", repoCwd, "branch", "--show-current"],
+    }).trim();
+
+    return currentBranch || "origin/main";
+  } catch {
+    return "origin/main";
+  }
+}
+
 function parseArgs(argv: string[]): TWorktreeArgs {
   let createBranchName: string | null = null;
-  let baseRef = "origin/main";
   let cwd = process.cwd();
   let workspaceName: string | null = null;
+  let baseRef: string | null = null;
   const forwardedArgs: string[] = [];
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -99,7 +112,7 @@ function parseArgs(argv: string[]): TWorktreeArgs {
 
   return {
     createBranchName,
-    baseRef,
+    baseRef: baseRef ?? getDefaultBaseRef({ repoCwd: cwd }),
     cwd,
     workspaceName,
     forwardedArgs,
