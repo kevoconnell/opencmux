@@ -1,15 +1,22 @@
-import fs from "node:fs";
+import { randomUUID } from "node:crypto";
+import * as fs from "node:fs/promises";
 import path from "node:path";
 import {
-  copyEnvFileIfPresent,
+  createTerminalSurfaceForPane,
+  createWorkspaceForCommand,
   getDefaultWorkspaceName,
-  getReploDevEnvFromSource,
-  getReploDevNameFromSource,
+  getProjectRoot,
+  getRuntimePaths,
   openWorkspaceForCwd,
+  parseWorkspaceTree,
   pathExists,
+  registerWorktreeWorkspace,
+  renameSurfaceTab,
   runCommand,
-  setReploDevEnvInEnv,
-  setReploDevNameInEnv,
+  selectSurfaceInPane,
+  sendKeyToSurface,
+  sendToSurface,
+  shellQuote,
 } from "./shared.js";
 
 type TWorktreeArgs = {
@@ -18,8 +25,6 @@ type TWorktreeArgs = {
   cwd: string;
   workspaceName: string | null;
   forwardedArgs: string[];
-  shouldInstall: boolean;
-  shouldConfigureDoppler: boolean;
 };
 
 function parseArgs(argv: string[]): TWorktreeArgs {
@@ -27,8 +32,6 @@ function parseArgs(argv: string[]): TWorktreeArgs {
   let baseRef = "origin/main";
   let cwd = process.cwd();
   let workspaceName: string | null = null;
-  let shouldInstall = true;
-  let shouldConfigureDoppler = true;
   const forwardedArgs: string[] = [];
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -84,12 +87,10 @@ function parseArgs(argv: string[]): TWorktreeArgs {
     }
 
     if (argument === "--no-install") {
-      shouldInstall = false;
       continue;
     }
 
     if (argument === "--no-doppler") {
-      shouldConfigureDoppler = false;
       continue;
     }
 
@@ -102,8 +103,6 @@ function parseArgs(argv: string[]): TWorktreeArgs {
     cwd,
     workspaceName,
     forwardedArgs,
-    shouldInstall,
-    shouldConfigureDoppler,
   };
 }
 
@@ -162,266 +161,67 @@ function repoHasCommits({ repoCwd }: { repoCwd: string }): boolean {
   }
 }
 
-function stripAnsi({ text }: { text: string }): string {
-  return text.replace(/\u001B\[[0-9;]*[A-Za-z]/g, "");
-}
-
-function isLikelyPnpmProject({ cwd }: { cwd: string }): boolean {
-  return (
-    fs.existsSync(path.join(cwd, "package.json")) &&
-    (fs.existsSync(path.join(cwd, "pnpm-lock.yaml")) ||
-      fs.existsSync(path.join(cwd, "pnpm-workspace.yaml")))
-  );
-}
-
-function parseWorktreePathFromWtOutput({ output }: { output: string }): string {
-  const cleanedOutput = stripAnsi({ text: output });
-  const outputLines = cleanedOutput
-    .split("\n")
-    .map((outputLine) => outputLine.trim())
-    .filter(Boolean);
-  const lastLine = outputLines.at(-1) ?? "";
-
-  if (!lastLine.startsWith("/")) {
-    throw new Error(
-      `Failed to parse worktree path from wt output:\n${cleanedOutput}`,
-    );
-  }
-
-  return lastLine;
-}
-
-function maybeInstallWorkspaceDependencies({
-  cwd,
-  shouldInstall,
+function findCreatedWorktreePath({
+  sourceCwd,
+  branchName,
 }: {
-  cwd: string;
-  shouldInstall: boolean;
-}): void {
-  if (!shouldInstall || !isLikelyPnpmProject({ cwd })) {
-    return;
-  }
+  sourceCwd: string;
+  branchName: string;
+}): string | null {
+  const worktreeListOutput = runCommand({
+    command: "git",
+    args: ["-C", sourceCwd, "worktree", "list", "--porcelain"],
+  });
+  let currentWorktreePath: string | null = null;
 
-  try {
-    runCommand({ command: "pnpm", args: ["install"], cwd });
-  } catch (error) {
-    console.warn(
-      [
-        "warning: `pnpm install` failed; continuing without dependencies.",
-        error instanceof Error ? error.message : String(error),
-      ].join("\n"),
-    );
-  }
-}
-
-type TGitWorktreeEntry = {
-  worktreePath: string;
-  branchRef: string | null;
-};
-
-function parseGitWorktreeList({
-  output,
-}: {
-  output: string;
-}): TGitWorktreeEntry[] {
-  const entries: TGitWorktreeEntry[] = [];
-  let currentEntry: TGitWorktreeEntry | null = null;
-
-  for (const outputLine of output.split("\n")) {
+  for (const outputLine of worktreeListOutput.split("\n")) {
     const line = outputLine.trim();
-
     if (!line) {
-      if (currentEntry?.worktreePath) {
-        entries.push(currentEntry);
-      }
-      currentEntry = null;
+      currentWorktreePath = null;
       continue;
     }
 
     if (line.startsWith("worktree ")) {
-      if (currentEntry?.worktreePath) {
-        entries.push(currentEntry);
-      }
-      currentEntry = {
-        worktreePath: line.slice("worktree ".length),
-        branchRef: null,
-      };
+      currentWorktreePath = line.slice("worktree ".length);
       continue;
     }
 
-    if (line.startsWith("branch ") && currentEntry) {
-      currentEntry.branchRef = line.slice("branch ".length);
+    if (currentWorktreePath && line === `branch refs/heads/${branchName}`) {
+      return currentWorktreePath;
     }
   }
 
-  if (currentEntry?.worktreePath) {
-    entries.push(currentEntry);
-  }
-
-  return entries;
+  return null;
 }
 
-function getComparableGitRefs({ ref }: { ref: string }): string[] {
-  const trimmedRef = ref.trim();
-  if (!trimmedRef) {
-    return [];
-  }
-
-  const comparableRefs = new Set<string>([trimmedRef]);
-
-  if (trimmedRef.startsWith("refs/heads/")) {
-    comparableRefs.add(trimmedRef.slice("refs/heads/".length));
-  }
-
-  if (trimmedRef.startsWith("refs/remotes/origin/")) {
-    const shortRef = trimmedRef.slice("refs/remotes/origin/".length);
-    comparableRefs.add(shortRef);
-    comparableRefs.add(`origin/${shortRef}`);
-  }
-
-  if (trimmedRef.startsWith("origin/")) {
-    const shortRef = trimmedRef.slice("origin/".length);
-    comparableRefs.add(shortRef);
-    comparableRefs.add(`refs/heads/${shortRef}`);
-    comparableRefs.add(`refs/remotes/origin/${shortRef}`);
-  }
-
-  if (!trimmedRef.startsWith("refs/") && !trimmedRef.startsWith("origin/")) {
-    comparableRefs.add(`refs/heads/${trimmedRef}`);
-    comparableRefs.add(`refs/remotes/origin/${trimmedRef}`);
-  }
-
-  return [...comparableRefs];
-}
-
-function getEnvSourceCwd({
+async function waitForCreatedWorktreePath({
   sourceCwd,
-  baseRef,
+  branchName,
+  doneFilePath,
 }: {
   sourceCwd: string;
-  baseRef: string;
-}): string {
-  try {
-    const worktreeOutput = runCommand({
-      command: "git",
-      args: ["-C", sourceCwd, "worktree", "list", "--porcelain"],
-    });
-    const baseRefCandidates = new Set(getComparableGitRefs({ ref: baseRef }));
-    const matchingWorktree = parseGitWorktreeList({
-      output: worktreeOutput,
-    }).find((worktreeEntry) => {
-      if (!worktreeEntry.branchRef) {
-        return false;
-      }
-
-      return getComparableGitRefs({ ref: worktreeEntry.branchRef }).some(
-        (candidateRef) => baseRefCandidates.has(candidateRef),
-      );
-    });
-
-    return matchingWorktree?.worktreePath ?? sourceCwd;
-  } catch {
-    return sourceCwd;
-  }
-}
-
-async function maybeCreateWorktree({
-  createBranchName,
-  baseRef,
-  sourceCwd,
-  shouldInstall,
-  shouldConfigureDoppler,
-}: {
-  createBranchName: string | null;
-  baseRef: string;
-  sourceCwd: string;
-  shouldInstall: boolean;
-  shouldConfigureDoppler: boolean;
-}): Promise<{ worktreePath: string; usedBaseRef: string | null }> {
-  if (!createBranchName) {
-    return { worktreePath: sourceCwd, usedBaseRef: null };
-  }
-
-  const hasCommits = repoHasCommits({ repoCwd: sourceCwd });
-  const hasResolvedBaseRef = ensureGitRefExists({
-    repoCwd: sourceCwd,
-    baseRef,
-  });
-
-  if (!hasResolvedBaseRef && hasCommits) {
-    throw new Error(`Could not resolve base ref: ${baseRef}`);
-  }
-
-  const wtArgs = ["-C", sourceCwd, "switch", "--create", createBranchName];
-
-  if (hasResolvedBaseRef) {
-    wtArgs.push("--base", baseRef);
-  }
-
-  wtArgs.push("--yes", "--no-verify", "-x", "pwd");
-
-  const wtOutput = runCommand({
-    command: "wt",
-    args: wtArgs,
-  });
-  const worktreePath = parseWorktreePathFromWtOutput({ output: wtOutput });
-
-  if (!(await pathExists(worktreePath))) {
-    throw new Error(
-      `wt reported a worktree path that does not exist: ${worktreePath}`,
-    );
-  }
-
-  const envSourceCwd = getEnvSourceCwd({
-    sourceCwd,
-    baseRef,
-  });
-
-  await copyEnvFileIfPresent({
-    sourceCwd: envSourceCwd,
-    targetCwd: worktreePath,
-  });
-
-  const reploDevName = await getReploDevNameFromSource({
-    sourceCwd: envSourceCwd,
-  });
-  if (reploDevName) {
-    await setReploDevNameInEnv({
-      targetCwd: worktreePath,
-      reploDevName,
-    });
-  }
-
-  const reploDevEnv = await getReploDevEnvFromSource({
-    sourceCwd: envSourceCwd,
-  });
-  if (reploDevEnv) {
-    await setReploDevEnvInEnv({
-      targetCwd: worktreePath,
-      reploDevEnv,
-    });
-  }
-
-  const dopplerAvailable =
-    fs.existsSync("/opt/homebrew/bin/doppler") ||
-    fs.existsSync("/usr/local/bin/doppler");
-
-  if (shouldConfigureDoppler && dopplerAvailable) {
+  branchName: string;
+  doneFilePath: string;
+}): Promise<string | null> {
+  for (;;) {
     try {
-      runCommand({
-        command: "doppler",
-        args: ["configure", "set", "--scope", ".", "config", "dev_personal"],
-        cwd: worktreePath,
+      const worktreePath = findCreatedWorktreePath({
+        sourceCwd,
+        branchName,
       });
+      if (worktreePath) {
+        return worktreePath;
+      }
     } catch {
-      // Keep the worktree usable even if doppler is unavailable or not configured.
+      // Keep polling while wt is still creating the worktree.
     }
-  }
 
-  return {
-    worktreePath,
-    usedBaseRef: hasResolvedBaseRef ? baseRef : null,
-  };
+    if (await pathExists(doneFilePath)) {
+      return null;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
 }
 
 export async function runWorktreeCommand({
@@ -429,46 +229,155 @@ export async function runWorktreeCommand({
 }: {
   argv: string[];
 }): Promise<void> {
-  const {
-    createBranchName,
+  const { createBranchName, baseRef, cwd, workspaceName, forwardedArgs } =
+    parseArgs(argv);
+
+  if (!createBranchName) {
+    const resolvedWorkspaceName =
+      workspaceName ?? getDefaultWorkspaceName({ cwd });
+    const { output: createOutput } = await openWorkspaceForCwd({
+      cwd,
+      workspaceName: resolvedWorkspaceName,
+      forwardedArgs,
+    });
+    console.log(createOutput);
+    return;
+  }
+
+  const hasCommits = repoHasCommits({ repoCwd: cwd });
+  const hasResolvedBaseRef = ensureGitRefExists({
+    repoCwd: cwd,
     baseRef,
-    cwd,
-    workspaceName,
-    forwardedArgs,
-    shouldInstall,
-    shouldConfigureDoppler,
-  } = parseArgs(argv);
-  const { worktreePath: worktreeCwd, usedBaseRef } = await maybeCreateWorktree({
-    createBranchName,
-    baseRef,
-    sourceCwd: cwd,
-    shouldInstall,
-    shouldConfigureDoppler,
-  });
-  const resolvedWorkspaceName =
-    workspaceName ?? getDefaultWorkspaceName({ cwd: worktreeCwd });
-  const createOutput = await openWorkspaceForCwd({
-    cwd: worktreeCwd,
-    workspaceName: resolvedWorkspaceName,
-    forwardedArgs,
   });
 
-  if (createBranchName) {
-    maybeInstallWorkspaceDependencies({
-      cwd: worktreeCwd,
-      shouldInstall,
+  if (!hasResolvedBaseRef && hasCommits) {
+    throw new Error(`Could not resolve base ref: ${baseRef}`);
+  }
+
+  const runtimePaths = getRuntimePaths();
+  await fs.mkdir(runtimePaths.runtimeStateDir, { recursive: true });
+
+  const fileSuffix = randomUUID();
+  const pathFilePath = path.join(
+    runtimePaths.runtimeStateDir,
+    `worktree-path-${fileSuffix}.txt`,
+  );
+  const doneFilePath = path.join(
+    runtimePaths.runtimeStateDir,
+    `worktree-done-${fileSuffix}.txt`,
+  );
+
+  const wtCommandParts = [
+    "wt",
+    "-C",
+    cwd,
+    "switch",
+    "--create",
+    createBranchName,
+  ];
+  if (hasResolvedBaseRef) {
+    wtCommandParts.push("--base", baseRef);
+  }
+  wtCommandParts.push(
+    "--yes",
+    "-x",
+    `bash -lc ${shellQuote(`pwd > ${shellQuote(pathFilePath)}`)}`,
+  );
+
+  const createScript = [
+    `rm -f ${shellQuote(pathFilePath)} ${shellQuote(doneFilePath)}`,
+    wtCommandParts.map(shellQuote).join(" "),
+    "wt_exit_code=$?",
+    `printf "%s" "$wt_exit_code" > ${shellQuote(doneFilePath)}`,
+    'echo "[opencmux] wt exited with code $wt_exit_code"',
+    `exec ${shellQuote(process.env.SHELL ?? "/bin/bash")} -l`,
+  ].join("; ");
+
+  const resolvedWorkspaceName =
+    workspaceName ?? `OpenCode | ${createBranchName}`;
+  const { output: createOutput, workspaceRef } =
+    await createWorkspaceForCommand({
+      cwd,
+      workspaceName: resolvedWorkspaceName,
+      commandString: `bash -lc ${shellQuote(createScript)}`,
+    });
+
+  const primaryPane = parseWorkspaceTree({ workspaceRef }).panes[0] ?? null;
+  const primaryPaneRef = primaryPane?.paneRef ?? null;
+  if (!primaryPaneRef) {
+    throw new Error(`Failed to resolve primary pane for ${workspaceRef}`);
+  }
+
+  const { surfaceRef: opencodeSurfaceRef } = createTerminalSurfaceForPane({
+    workspaceRef,
+    paneRef: primaryPaneRef,
+  });
+  renameSurfaceTab({
+    workspaceRef,
+    surfaceRef: opencodeSurfaceRef,
+    title: "OpenCode",
+  });
+
+  const projectRoot = getProjectRoot();
+  const tsxPath = path.join(projectRoot, "node_modules", ".bin", "tsx");
+  const launcherPath = path.join(projectRoot, "src", "commands", "opencmux.ts");
+  const launcherArgs = [
+    tsxPath,
+    launcherPath,
+    "--opencmux-worktree-path-b64",
+    '"$worktree_path_b64"',
+    ...forwardedArgs,
+  ]
+    .map((commandPart) =>
+      commandPart === '"$worktree_path_b64"'
+        ? commandPart
+        : shellQuote(commandPart),
+    )
+    .join(" ");
+  const opencodeCommand = [
+    `branch_name=${shellQuote(createBranchName)}`,
+    `while true; do worktree_path=$(git -C ${shellQuote(cwd)} worktree list --porcelain | awk -v target_ref="refs/heads/$branch_name" '/^worktree /{worktree=$2} /^branch /{if ($2 == target_ref) {print worktree; exit}}'); if [ -n "$worktree_path" ]; then break; fi; if [ -f ${shellQuote(doneFilePath)} ]; then echo "[opencmux] wt create did not produce a worktree path"; exec ${shellQuote(process.env.SHELL ?? "/bin/bash")} -l; fi; sleep 1; done`,
+    'worktree_path_b64=$(printf "%s" "$worktree_path" | base64 | tr -d \'[:space:]\')',
+    'cd "$worktree_path"',
+    `exec env ${launcherArgs}`,
+  ].join("; ");
+
+  sendToSurface({
+    workspaceRef,
+    surfaceRef: opencodeSurfaceRef,
+    text: `bash -lc ${shellQuote(opencodeCommand)}`,
+  });
+  sendKeyToSurface({
+    workspaceRef,
+    surfaceRef: opencodeSurfaceRef,
+    key: "enter",
+  });
+  selectSurfaceInPane({
+    workspaceRef,
+    paneRef: primaryPaneRef,
+    surfaceRef: opencodeSurfaceRef,
+  });
+
+  const worktreeCwd = await waitForCreatedWorktreePath({
+    sourceCwd: cwd,
+    branchName: createBranchName,
+    doneFilePath,
+  });
+  if (worktreeCwd) {
+    await registerWorktreeWorkspace({
+      worktreePath: worktreeCwd,
+      workspaceRef,
     });
   }
 
-  if (createBranchName) {
-    console.log(`branch: ${createBranchName}`);
-    if (usedBaseRef) {
-      console.log(`base: ${usedBaseRef}`);
-    } else {
-      console.log("base: (none; created from unborn repo)");
-    }
+  console.log(`branch: ${createBranchName}`);
+  if (hasResolvedBaseRef) {
+    console.log(`base: ${baseRef}`);
+  } else {
+    console.log("base: (none; created from unborn repo)");
+  }
+  if (worktreeCwd) {
     console.log(`path: ${worktreeCwd}`);
   }
-
   console.log(createOutput);
 }

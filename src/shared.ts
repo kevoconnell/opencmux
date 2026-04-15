@@ -492,7 +492,7 @@ function inferWorkspaceRefFromStatePath(statePath: string): string | null {
     : null;
 }
 
-function parseWorkspaceTree({
+export function parseWorkspaceTree({
   workspaceRef,
 }: {
   workspaceRef: string;
@@ -896,52 +896,75 @@ export function createTerminalPaneForWorkspace({
   };
 }
 
-function navigateBrowserSurface({
-  workspaceRef,
-  surfaceRef,
-  url,
-}: {
-  workspaceRef: string;
-  surfaceRef: string;
-  url: string;
-}): void {
-  runCommand({
-    command: requireCommand("cmux"),
-    args: ["browser", "--surface", surfaceRef, "goto", url],
-    env: {
-      ...process.env,
-      CMUX_WORKSPACE_ID: workspaceRef,
-    },
-  });
-}
-
-export function reloadBrowserSurface({
-  workspaceRef,
-  surfaceRef,
-}: {
-  workspaceRef: string;
-  surfaceRef: string;
-}): void {
-  runCommand({
-    command: requireCommand("cmux"),
-    args: ["browser", "--surface", surfaceRef, "reload"],
-    env: {
-      ...process.env,
-      CMUX_WORKSPACE_ID: workspaceRef,
-    },
-  });
-}
-
-export function focusCmuxPane({
+export function createTerminalSurfaceForPane({
   workspaceRef,
   paneRef,
 }: {
   workspaceRef: string;
   paneRef: string;
+}): { surfaceRef: string } {
+  const output = runCommand({
+    command: requireCommand("cmux"),
+    args: [
+      "new-surface",
+      "--type",
+      "terminal",
+      "--workspace",
+      workspaceRef,
+      "--pane",
+      paneRef,
+    ],
+  });
+
+  return {
+    surfaceRef: parseRefFromOutput({ output, prefix: "surface" }),
+  };
+}
+
+export function renameSurfaceTab({
+  workspaceRef,
+  surfaceRef,
+  title,
+}: {
+  workspaceRef: string;
+  surfaceRef: string;
+  title: string;
 }): void {
   runCommand({
     command: requireCommand("cmux"),
-    args: ["focus-pane", "--workspace", workspaceRef, "--pane", paneRef],
+    args: [
+      "rename-tab",
+      "--workspace",
+      workspaceRef,
+      "--surface",
+      surfaceRef,
+      title,
+    ],
+  });
+}
+
+export function selectSurfaceInPane({
+  workspaceRef,
+  paneRef,
+  surfaceRef,
+}: {
+  workspaceRef: string;
+  paneRef: string;
+  surfaceRef: string;
+}): void {
+  runCommand({
+    command: requireCommand("cmux"),
+    args: [
+      "move-surface",
+      "--workspace",
+      workspaceRef,
+      "--surface",
+      surfaceRef,
+      "--pane",
+      paneRef,
+      "--focus",
+      "true",
+    ],
   });
 }
 
@@ -979,6 +1002,42 @@ export function sendKeyToSurface({
       surfaceRef,
       key,
     ],
+  });
+}
+
+function navigateBrowserSurface({
+  workspaceRef,
+  surfaceRef,
+  url,
+}: {
+  workspaceRef: string;
+  surfaceRef: string;
+  url: string;
+}): void {
+  runCommand({
+    command: requireCommand("cmux"),
+    args: ["browser", "--surface", surfaceRef, "goto", url],
+    env: {
+      ...process.env,
+      CMUX_WORKSPACE_ID: workspaceRef,
+    },
+  });
+}
+
+export function reloadBrowserSurface({
+  workspaceRef,
+  surfaceRef,
+}: {
+  workspaceRef: string;
+  surfaceRef: string;
+}): void {
+  runCommand({
+    command: requireCommand("cmux"),
+    args: ["browser", "--surface", surfaceRef, "reload"],
+    env: {
+      ...process.env,
+      CMUX_WORKSPACE_ID: workspaceRef,
+    },
   });
 }
 
@@ -1284,6 +1343,40 @@ async function createCmuxWorkspaceWithRetry({
   throw new Error("Failed to create cmux workspace");
 }
 
+export async function createWorkspaceForCommand({
+  cwd,
+  workspaceName,
+  commandString,
+}: {
+  cwd: string;
+  workspaceName: string;
+  commandString: string;
+}): Promise<{ output: string; workspaceRef: string }> {
+  const cmuxPath = requireCommand("cmux");
+  const createOutput = await createCmuxWorkspaceWithRetry({
+    cmuxPath,
+    workspaceName,
+    cwd,
+    buildCommandString: async () => commandString,
+  });
+  const workspaceRef = parseRefFromOutput({
+    output: createOutput,
+    prefix: "workspace",
+  });
+
+  if (workspaceRef.startsWith("workspace:")) {
+    runCommand({
+      command: cmuxPath,
+      args: ["select-workspace", "--workspace", workspaceRef],
+    });
+  }
+
+  return {
+    output: createOutput,
+    workspaceRef,
+  };
+}
+
 export async function openWorkspaceForCwd({
   cwd,
   workspaceName,
@@ -1292,7 +1385,7 @@ export async function openWorkspaceForCwd({
   cwd: string;
   workspaceName: string;
   forwardedArgs: string[];
-}): Promise<string> {
+}): Promise<{ output: string; workspaceRef: string }> {
   const cmuxPath = requireCommand("cmux");
   const existingWorkspaceRef = (
     await resolveWorkspaceBinding({ worktreePath: cwd })
@@ -1303,7 +1396,10 @@ export async function openWorkspaceForCwd({
       command: cmuxPath,
       args: ["select-workspace", "--workspace", existingWorkspaceRef],
     });
-    return `OK ${existingWorkspaceRef} (existing)`;
+    return {
+      output: `OK ${existingWorkspaceRef} (existing)`,
+      workspaceRef: existingWorkspaceRef,
+    };
   }
 
   const createOutput = await createCmuxWorkspaceWithRetry({
@@ -1333,7 +1429,10 @@ export async function openWorkspaceForCwd({
     });
   }
 
-  return createOutput;
+  return {
+    output: createOutput,
+    workspaceRef,
+  };
 }
 
 export function getCanonicalRepoRoot({ cwd }: { cwd: string }): string {
