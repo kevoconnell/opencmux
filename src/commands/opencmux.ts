@@ -327,7 +327,14 @@ async function parseLauncherArgs(argv: string[]): Promise<{
   }
 
   if (launchPayloadPath) {
-    return readLaunchPayload({ payloadPath: launchPayloadPath });
+    const launchPayload = await readLaunchPayload({
+      payloadPath: launchPayloadPath,
+    });
+
+    return {
+      forwardedArgs: launchPayload.forwardedArgs,
+      worktreePath: worktreePath ?? launchPayload.worktreePath,
+    };
   }
 
   return {

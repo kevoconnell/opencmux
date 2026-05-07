@@ -17,6 +17,7 @@ import {
   sendKeyToSurface,
   sendToSurface,
   shellQuote,
+  writeWorkspaceLaunchPayload,
 } from "./shared.js";
 
 type TWorktreeArgs = {
@@ -334,12 +335,17 @@ export async function runWorktreeCommand({
   const projectRoot = getProjectRoot();
   const tsxPath = path.join(projectRoot, "node_modules", ".bin", "tsx");
   const launcherPath = path.join(projectRoot, "src", "commands", "opencmux.ts");
+  const launchPayloadPath = await writeWorkspaceLaunchPayload({
+    forwardedArgs,
+    worktreePath: null,
+  });
   const launcherArgs = [
     tsxPath,
     launcherPath,
+    "--opencmux-launch-payload-path",
+    launchPayloadPath,
     "--opencmux-worktree-path-b64",
     '"$worktree_path_b64"',
-    ...forwardedArgs,
   ]
     .map((commandPart) =>
       commandPart === '"$worktree_path_b64"'

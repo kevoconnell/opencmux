@@ -1396,6 +1396,47 @@ export async function openWorkspaceForCwd({
       command: cmuxPath,
       args: ["select-workspace", "--workspace", existingWorkspaceRef],
     });
+
+    if (forwardedArgs.length > 0) {
+      const primaryPaneRef =
+        parseWorkspaceTree({ workspaceRef: existingWorkspaceRef }).panes[0]
+          ?.paneRef ?? null;
+
+      if (!primaryPaneRef) {
+        throw new Error(
+          `Failed to resolve primary pane for ${existingWorkspaceRef}`,
+        );
+      }
+
+      const { surfaceRef } = createTerminalSurfaceForPane({
+        workspaceRef: existingWorkspaceRef,
+        paneRef: primaryPaneRef,
+      });
+      renameSurfaceTab({
+        workspaceRef: existingWorkspaceRef,
+        surfaceRef,
+        title: "OpenCode",
+      });
+      sendToSurface({
+        workspaceRef: existingWorkspaceRef,
+        surfaceRef,
+        text: `cd ${shellQuote(cwd)}; exec ${await buildWorkspaceLaunchCommand({
+          forwardedArgs,
+          worktreePath: cwd,
+        })}`,
+      });
+      sendKeyToSurface({
+        workspaceRef: existingWorkspaceRef,
+        surfaceRef,
+        key: "enter",
+      });
+      selectSurfaceInPane({
+        workspaceRef: existingWorkspaceRef,
+        paneRef: primaryPaneRef,
+        surfaceRef,
+      });
+    }
+
     return {
       output: `OK ${existingWorkspaceRef} (existing)`,
       workspaceRef: existingWorkspaceRef,
